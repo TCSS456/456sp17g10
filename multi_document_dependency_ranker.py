@@ -19,9 +19,16 @@ from nltk.parse.stanford import StanfordParser
 from pprint import pprint;
 from nltk.tree import *;
 
+# Sentiment Analysis
+from textblob import TextBlob
+
+from DependencyTool import DependencyTool
+
 # Environmental Variables
 os.environ['STANFORD_PARSER'] = './stanford-parser-full/'
 os.environ['STANFORD_MODELS'] = './stanford-parser-full/'
+
+
 
 MODEL_PATH = "./stanford-parser-full/englishPCFG.ser.gz";
 
@@ -30,88 +37,100 @@ class multi_document_dependency_ranker:
     self.dep_parser = StanfordDependencyParser(model_path=MODEL_PATH);
     self.dep_parser.java_options = '-mx3052m'
 
-  def __build_graph(self, nodes):
-    graph = nx.Graph()
-    
-    graph.add_nodes_from(nodes);
-    nodePairs = list(itertools.combinations(nodes, 2));
+    self.dependency_tool = DependencyTool();
 
-    for pair in nodePairs:
-        first = pair[0];
-        second = pair[1];
+    self.nodes = list();
+    self.dependency_frequencies = {};
+    self.edge_frequencies = {};
+
+  def __build_graph(self):
+    graph = nx.Graph() # or digraph?
+    join = lambda x:'(('+x[0][0]+','+x[0][1]+'),'+x[1]+',('+x[2][0]+','+x[2][1]+'))'
+    graph.add_nodes_from(map(join, self.dependencies));
+
+    complete_edges = itertools.combinations(self.dependencies, 2)
+
+    for edge in complete_edges:
+        first = edge[0];
+        second = edge[1];
         weight = self.__calculateWeight(first, second);
-        graph.add_edge(first, second, weight=weight);
+        graph.add_edge(join(first), join(second), weight=weight);
     return graph;
   
   def __calculateWeight(self, first, second):
-    #sentiment
-    #frequency
-    return 1;
+    a = wn.synsets(wn.morphy(first[0][0]) or first[0][0]);
+    b = wn.synsets(wn.morphy(first[2][0]) or first[2][0]);
+    y = wn.synsets(wn.morphy(second[0][0]) or second[0][0]);
+    z = wn.synsets(wn.morphy(second[2][0]) or second[2][0]);
+
+    similarity = 0;
+    if a is None or b is None or y is None or z is None or len(a) == 0 or len(b) == 0 or len(y) == 0 or len(z) == 0:
+      #nothing
+      similarity = 0;
+    else:
+      similarity = similarity + (a[0].wup_similarity(y[0]) or 0);
+      similarity = similarity + (a[0].wup_similarity(z[0]) or 0);
+      similarity = similarity + (b[0].wup_similarity(y[0]) or 0);
+      similarity = similarity + (b[0].wup_similarity(z[0]) or 0);
+      similarity = similarity / float(4);
+
+    #sentiment = abs(TextBlob(a).sentiment.polarity * TextBlob(b).sentiment.polarity * TextBlob(c)).sentiment.polarity * TextBlob(d)).sentiment.polarity);
+
+    #cosine similarity todo
+    #need overall sentiment
+
+    weight = self.dependency_tool.frequency(first) * self.dependency_tool.frequency(first) * similarity;
+    return weight;
+
+  def __order(first, second):
+    if first < second:
+      a = first;
+      b = second;
+    else:
+      a = second;
+      b = first;
+    return (a, b);
 
   def rank(self, documents):
-    #parse documents to nodes/dependencies
-    (nodes,frequencies) = self.__parse(documents);
-    graph = self.__build_graph(nodes);
+    #parse documents
+    self.__parse_documents(documents);
 
+    pprint(self.dependencies, open("nodes.txt", "w"));
+    pprint(self.dependency_frequencies, open("node_frequencies.txt", "w"));
+    pprint(self.edge_frequencies, open("edge_frequencies.txt", "w"));
+
+    print("Building graph...")
+    graph = self.__build_graph();
     #debug view graph
-    nx.draw(graph, with_labels = True);
-    plt.show();
+    #nx.draw(graph, with_labels = True);
+    #plt.show();
 
-    ranked_dependencies = nx.pagerank(graph, weight='weight');
-    sorted_dependencies = sorted(ranked_dependencies, key=ranked_dependencies.get, reverse=True);
-    one_third = len(nodes);
-    key_dependenceies = sorted_dependencies[0:one_third+1];
+    print("Ranking nodes...")
+    ranked_nodes = nx.pagerank(graph, weight='weight');
+    sorted_nodes = sorted(ranked_nodes, key=ranked_nodes.get);
+
+    print('Sorted Ranked Nodes:');
+    pprint(sorted_nodes);
 
   def __is_hashtag(self, word):
     return '#' in word;
 
-  def __parse(self, documents):
-    stoplist = stopwords.words('english')
-    results = self.dep_parser.raw_parse_sents(documents);
-    word_set = set();
-    morph_set = set();
-    dependece_frequencies = {};
-    morph_dependence_frequencies = {};
-    for result in results:
-      for graph in result:
-        for i in graph.nodes:
-          node = graph.nodes[i];
-          if 'word' in node.keys() and node['word'] != None:
-            word = node['word'];
-            if not word in stoplist and not self.__is_hashtag(word):
-              word_set.add(word);
-        for triple in graph.triples():
-          first = triple[0][0];
-          second = triple[2][0];
-          for word in (first, second):
-            if word not in stoplist:
-              if word in dependece_frequencies and not self.__is_hashtag(word):
-                dependece_frequencies[word] += 1;
-              else:
-                dependece_frequencies[word] = 1;
+  def __parse_documents(self, documents):
+    for document in documents:
+      sents = nltk.sent_tokenize(document);
+      results = self.dep_parser.raw_parse_sents(sents);
+      for result in results:
+        for graph in result:
+          self.dependency_tool.put_all(graph.triples());
     
-    for word in dependece_frequencies:
-      morph_word = wn.morphy(word);
-      if morph_word != None:
-        morph_set.add(morph_word);
-        if morph_word in morph_dependence_frequencies:
-          morph_dependence_frequencies[morph_word] += dependece_frequencies[word];
-        else:
-          morph_dependence_frequencies[morph_word] = dependece_frequencies[word];
-      else:
-        morph_dependence_frequencies[word] = dependece_frequencies[word];
-
-    #calculate word relational frequencies
-    pprint(dependece_frequencies);
-    pprint(morph_dependence_frequencies);
-    
-    
-    return (list(word_set), dependece_frequencies);
+    self.dependencies = list(self.dependency_tool.dependencies());
+    self.dependency_frequencies = self.dependency_tool.dependency_frequencies();
+    self.edge_frequencies = self.dependency_tool.edge_frequencies();
     
 
 #test data
 
-documents = ["I have a cat. The cat is cool. #coolcat", "He has a cat. His cat is cool.", "They have a cat. Their cat is cool."];
+documents = [open('corpus.txt').read().replace('\r\n', ' ')];
 
 #convert all to lower case
 for i, document in enumerate(documents):

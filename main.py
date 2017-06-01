@@ -20,7 +20,7 @@ tag_freq_table = {};
 
 for tweet in tweepy.Cursor(api.search,
                            q=search_text,
-                           count=10,
+                           count=2,
                            result_type="recent",
                            include_entities=True,
                            lang="en").items():
