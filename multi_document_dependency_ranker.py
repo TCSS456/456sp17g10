@@ -6,6 +6,7 @@ from nltk.corpus import stopwords;
 import matplotlib.pyplot as plt;
 import itertools
 import networkx as nx
+import networkx.algorithms as nxaa
 
 
 # Stanford Parser Dependencies
@@ -22,7 +23,14 @@ from nltk.tree import *;
 # Sentiment Analysis
 from textblob import TextBlob
 
+from datetime import datetime
+
 from DependencyTool import DependencyTool
+import SentenceGenerator as sg
+import markovify
+
+import pickle
+import json
 
 # Environmental Variables
 os.environ['STANFORD_PARSER'] = './stanford-parser-full/'
@@ -32,7 +40,7 @@ os.environ['STANFORD_MODELS'] = './stanford-parser-full/'
 
 MODEL_PATH = "./stanford-parser-full/englishPCFG.ser.gz";
 
-class multi_document_dependency_ranker:
+class multi_document_dependency_ranker(object):
   def __init__(self):
     self.dep_parser = StanfordDependencyParser(model_path=MODEL_PATH);
     self.dep_parser.java_options = '-mx3052m'
@@ -40,21 +48,34 @@ class multi_document_dependency_ranker:
     self.dependency_tool = DependencyTool();
 
     self.nodes = list();
-    self.dependency_frequencies = {};
-    self.edge_frequencies = {};
 
   def __build_graph(self):
-    graph = nx.Graph() # or digraph?
-    join = lambda x:'(('+x[0][0]+','+x[0][1]+'),'+x[1]+',('+x[2][0]+','+x[2][1]+'))'
-    graph.add_nodes_from(map(join, self.dependencies));
+    graph = nx.Graph()
+    for d in self.dependency_tool.dependencies('filtered'):
+      name = '[["'+d[0][0]+'","'+d[0][1]+'"],"'+d[1]+'",["'+d[2][0]+'","'+d[2][1]+'"]]';
+      graph.add_node(name, triple=d);
 
-    complete_edges = itertools.combinations(self.dependencies, 2)
+    complete_edges = itertools.combinations(graph.nodes(data=True), 2)
 
     for edge in complete_edges:
-        first = edge[0];
-        second = edge[1];
+        first = edge[0][1]['triple'];
+        second = edge[1][1]['triple'];
         weight = self.__calculateWeight(first, second);
-        graph.add_edge(join(first), join(second), weight=weight);
+        graph.add_edge(edge[0][0], edge[1][0], weight=weight);
+    
+    # remove isolated nodes
+    graph.remove_nodes_from(nx.isolates(graph))
+    remove = [node for node,degree in graph.degree().items() if degree == 0]
+    graph.remove_nodes_from(remove)
+
+    components = nx.connected_components(graph);
+
+    i = 1;
+    for component in components:
+      print('[' + str(i) + ']');
+      print('# elements: ' + str(len(component)));
+      i = i + 1;
+
     return graph;
   
   def __calculateWeight(self, first, second):
@@ -79,7 +100,7 @@ class multi_document_dependency_ranker:
     #cosine similarity todo
     #need overall sentiment
 
-    weight = self.dependency_tool.frequency(first) * self.dependency_tool.frequency(first) * similarity;
+    weight = self.dependency_tool.frequency(first) * self.dependency_tool.frequency(second) * similarity;
     return weight;
 
   def __order(first, second):
@@ -95,46 +116,164 @@ class multi_document_dependency_ranker:
     #parse documents
     self.__parse_documents(documents);
 
-    pprint(self.dependencies, open("nodes.txt", "w"));
-    pprint(self.dependency_frequencies, open("node_frequencies.txt", "w"));
-    pprint(self.edge_frequencies, open("edge_frequencies.txt", "w"));
+    pprint(self.dependency_tool.dependencies('unfiltered'), open("nodes.txt", "w"));
+    pprint(self.dependency_tool.dependency_frequencies('unfiltered'), open("node_frequencies.txt", "w"));
+    pprint(self.dependency_tool.edge_frequencies('unfiltered'), open("edge_frequencies.txt", "w"));
 
     print("Building graph...")
-    graph = self.__build_graph();
+    
+    a = datetime.now();
+    self.graph = self.__build_graph();
+    b = datetime.now();
+    c = b - a;
+    print('[Build Graph Time] ' + str(c));
+
     #debug view graph
     #nx.draw(graph, with_labels = True);
     #plt.show();
 
     print("Ranking nodes...")
-    ranked_nodes = nx.pagerank(graph, weight='weight');
-    sorted_nodes = sorted(ranked_nodes, key=ranked_nodes.get);
+    self.ranked_nodes = nx.pagerank(self.graph, weight='weight');
+    pprint(self.ranked_nodes, open("ranked-nodes.txt", "w"));
+    sorted_nodes = sorted(self.ranked_nodes, key=self.ranked_nodes.get);
+
+    pprint(self.ranked_nodes);
 
     print('Sorted Ranked Nodes:');
-    pprint(sorted_nodes);
+    pprint(sorted_nodes, open("sorted-ranked-nodes.txt", "w"));
+    pprint("Complete...");
+
+  def analyze(self):
+    g = nx.DiGraph()
+    added = set();
+    score_tol = 0.0025;
+    for n in self.ranked_nodes:
+      score = self.ranked_nodes[n];
+      if score > score_tol:
+        triple = json.loads(n);
+        a = wn.morphy(triple[0][0]) or triple[0][0];
+        b = wn.morphy(triple[2][0]) or triple[2][0];
+        if a not in added:
+          g.add_node(a, pos=triple[0][1], weight=score);
+          added.add(a);
+        if b not in added:
+          g.add_node(b, pos=triple[2][1], weight=score);
+          added.add(b);
+    for n in self.ranked_nodes:
+      score = self.ranked_nodes[n];
+      if score > score_tol:
+        triple = json.loads(n);
+        a = wn.morphy(triple[0][0]) or triple[0][0];
+        b = wn.morphy(triple[2][0]) or triple[2][0];
+        relationship = triple[1];
+        g.add_edge(a, b, dep=relationship, weight=score);
+    nx.draw(g, with_labels = True);
+    plt.show();
+
+    for e in g.edges(data=True):
+      dep = e[2]['dep']
+      str = "";
+      if dep == 'amod':
+        str = e[1] + " " + e[0];
+      if dep == 'nmod':
+        str = e[1] + " " + e[0] + "/NP";
+      if dep == 'aux':
+        str = e[1] + " " + e[0];
+      if dep == 'dep':
+        str = 'unknown dependency : %s, %s' % (e[0], e[1]);
+      if not str == "":
+        print(str);
+      else:
+        print(e);
+
+
+
+    #print(list(g.in_degree_iter()));
+    #print(list(g.out_degree_iter()));
+
+    #ranked = nx.pagerank(g);
+    #sorted_ = sorted(ranked, key=ranked.get, reverse=True);
+    #l = list();
+    #gw = "";
+    #for i in sorted_:
+    #  l.append((i, ranked[i]));
+
+
+
 
   def __is_hashtag(self, word):
     return '#' in word;
 
+  def __clean_word(self, word):
+    return wn.morphy(word) or word
+
+  def __triples2graph(self, triples):
+    G = nx.MultiDiGraph()
+    added_words = set();
+    for triple in triples:
+      words = [triple[x][0] for x in (0,2)];
+      base_words = [self.__clean_word(w) for w in words];
+      poss = [triple[x][1] for x in (0,2)];
+      rel = triple[1];
+      for i in xrange(0, 1):
+        (word, base, pos) = (words[i], base_words[i], poss[i]);
+        if base not in added_words:
+          added_words.add(base);
+          G.add_node(base, word=list((word, pos)));
+        else:
+          for n in G.nodes(data=True):
+            if n[0] == base:
+              n[1]['word'].append((word, pos));
+        G.add_edge(base_words[0], base_words[1], rel=rel);
+    return G;
+
   def __parse_documents(self, documents):
     for document in documents:
       sents = nltk.sent_tokenize(document);
-      results = self.dep_parser.raw_parse_sents(sents);
-      for result in results:
-        for graph in result:
-          self.dependency_tool.put_all(graph.triples());
-    
-    self.dependencies = list(self.dependency_tool.dependencies());
-    self.dependency_frequencies = self.dependency_tool.dependency_frequencies();
-    self.edge_frequencies = self.dependency_tool.edge_frequencies();
+      if not os.path.isfile('parsed.pickle') or not os.path.isfile('graph.pickle'):
+        print('Parsing...');
+        a = datetime.now();
+        results = self.dep_parser.raw_parse_sents(sents);
+        b = datetime.now();
+        c = b - a;
+        print('[Parse Time] ' + str(c));
+        print('Pickling parse...');
+        all_triples = list();
+        for result in results:
+          for graph in result:
+            triples = graph.triples();
+            all_triples.extend(triples);
+        self.dependency_tool.put_all(all_triples);
+        self.G = self.__triples2graph(all_triples);
+        
+        pickle.dump(self.G, open('graph.pickle', 'wb'));
+        pickle.dump(self.dependency_tool, open('parsed.pickle', 'wb'));
+      else:
+        print('Unpickling parse...');
+        self.dependency_tool = pickle.load(open('parsed.pickle', 'rb'));
+        self.G = pickle.load(open('graph.pickle', 'rb'));
     
 
 #test data
-
-documents = [open('corpus.txt').read().replace('\r\n', ' ')];
+alien_document = open('corpus.txt').read().replace('\r\n', ' ').lower();
+documents = [alien_document];
 
 #convert all to lower case
 for i, document in enumerate(documents):
   documents[i] = document.lower();
 
-ranker = multi_document_dependency_ranker();
-ranker.rank(documents);
+if not os.path.isfile('resume.pickle'):
+  ranker = multi_document_dependency_ranker();
+  ranker.rank(documents);
+  print('Dumping pickle...');
+  pickle.dump(ranker, open('resume.pickle', 'wb'));
+else:
+  print('Loading pickle...');
+  ranker = pickle.load(open('resume.pickle', 'rb'));
+  ranker.analyze();
+  print('Loaded.');
+
+# markovify test
+#pos_gen = sg.SentenceGenerator(alien_document);
+#gen = markovify.combine([pos_gen, chain])
+#print(gen.make_sentence());

@@ -2,39 +2,46 @@ from nltk.corpus import stopwords;
 import itertools;
 
 class DependencyTool:
-  def __init__(self, filter_stopwords=True):
-    self.total = 0;
-    self.counts = {};
-    self.filter_stopwords = filter_stopwords;
+  def __init__(self):
+    self.total = {'unfiltered': 0, 'filtered': 0};
+    self.counts = {'unfiltered': {}, 'filtered': {}};
     self.stop = stopwords.words('english');
+
+  def _put(self, dependency, group_name):
+    self.total[group_name] = self.total[group_name] + 1;
+    group = self.counts[group_name];
+    if dependency in group:
+      group[dependency] = group[dependency] + 1;
+    else:
+      group[dependency] = 1;
   
   def put(self, dependency):
-    if (self.filter_stopwords and not self.contains_stopwords(dependency)):
-      self.total = self.total + 1;
-      if dependency in self.counts:
-        self.counts[dependency] = self.counts[dependency] + 1;
-      else:
-        self.counts[dependency] = 1;
+    self._put(dependency, 'unfiltered');
+    if not self.contains_stopwords(dependency):
+      self._put(dependency, 'filtered');
   
   def put_all(self, dependencies):
     for dependency in dependencies:
       self.put(dependency);
 
-  def dependencies(self):
-    return self.counts.keys();
+  def dependencies(self, group_name):
+    return self.counts[group_name].keys();
 
-  def count(self, dependency):
-    if dependency in self.counts:
-      return self.counts[dependency];
+  def count(self, dependency, group_name):
+    group = self.counts[group_name];
+    if dependency in group:
+      return group[dependency];
     else:
       return 0;
   
   # add-one smoothing
-  def frequency(self, dependency):
-    if dependency in self.counts:
-      return (self.counts[dependency] + 1) / float(self.total);
+  def frequency(self, dependency, group_name='filtered'):
+    group = self.counts[group_name];
+    total = float(self.total[group_name]);
+    if dependency in group:
+      return (group[dependency] + 1) / total;
     else:
-      return 1 / float(self.total);
+      return 1 / total;
 
   def contains_stopwords(self, dependency):
     if dependency[0][0] in self.stop or dependency[2][0] in self.stop:
@@ -42,15 +49,17 @@ class DependencyTool:
     else:
       return False;
   
-  def dependency_frequencies(self):
+  def dependency_frequencies(self, group_name):
     freq = {};
     for dependency in self.counts:
-      freq[dependency] = self.frequency(dependency);
+      freq[dependency] = self.frequency(dependency, group_name);
     return freq;
 
-  def edge_frequencies(self):
+  def edge_frequencies(self, group_name):
+    group = self.counts[group_name];
+    total = float(self.total[group_name]);
     freq = {};
-    for comb in itertools.combinations(self.counts.keys(), 2):
+    for comb in itertools.combinations(group.keys(), 2):
       (first, second) = comb;
       if first[0] in second or first[2] in second:
         if comb in freq:
