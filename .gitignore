@@ -1,2 +1,4 @@
 creds.json
 stanford-parser-full/
+*.txt
+*.pickle
