@@ -24,6 +24,7 @@ from nltk.tree import *;
 from textblob import TextBlob
 
 from datetime import datetime
+from math import floor
 
 from DependencyTool import DependencyTool
 import SentenceGenerator as sg
@@ -39,6 +40,9 @@ os.environ['STANFORD_MODELS'] = './stanford-parser-full/'
 
 
 MODEL_PATH = "./stanford-parser-full/englishPCFG.ser.gz";
+
+STOP_TYPES = ['det', 'aux', 'cop', 'neg', 'case', 'mark', 'nsubj'];
+LEFT_NON_TERMINAL = ['nsubjpass'];
 
 class multi_document_dependency_ranker(object):
   def __init__(self):
@@ -143,7 +147,119 @@ class multi_document_dependency_ranker(object):
     pprint(sorted_nodes, open("sorted-ranked-nodes.txt", "w"));
     pprint("Complete...");
 
+  def __get_all_nsubj_roots(self, G):
+    nsubj = set();
+    for e in G.edges(data=True):
+      rel = e[2]['rel']
+      out_degree = G.out_degree(e[1])
+      if rel == 'nsubj' and out_degree == 0:
+        nsubj.add(e[1]);
+    return nsubj;
+
+  def analyze2(self):
+    G = self.G
+    nsubj_roots = self.__get_all_nsubj_roots(G);
+    print("#nsubjs: %d" % len(nsubj_roots));
+    all_sents = list();
+    for n in nsubj_roots:
+      print(n);
+      in_edges = G.in_edges(n);
+      for in_edge in in_edges:
+        sents = list();
+        visited_nodes = set();
+        left_sent = list();
+        left_sent.append(n);
+        cur_node = in_edge[0];
+        cur_rel = 'nsubj_root';
+        sents = self.__find_sentences(G, nsubj_roots, visited_nodes, left_sent, cur_node, cur_rel, sents)
+        all_sents.extend(sents);
+    max_length = 0;
+    MAX_ALLOWED_LENGTH = 25;
+
+    for sent in all_sents:
+      if len(sent) < MAX_ALLOWED_LENGTH:
+        max_length = len(sent)
+        pprint(sent);
+    print(max_length);
+    
+
+  def __find_sentences(self, G, nsubj_roots, visited_nodes, left_sent, cur_node, cur_rel, sents):
+    '''
+    G: the complete parse graph
+    left_sent: current sentence up to current node
+    cur_node: current node in graph
+    sents: list of complete sentences
+    '''
+    cur_node_attrs = G.node[cur_node];
+
+    if cur_node in visited_nodes:
+      #cycles detected exit
+      return sents;
+    else:
+      visited_nodes.add(cur_node);
+    
+    if cur_node not in nsubj_roots:
+      out_degree = G.out_degree(cur_node);
+      if out_degree == 0 and cur_rel not in STOP_TYPES and cur_rel not in LEFT_NON_TERMINAL:
+        sent = left_sent;
+        sent.append(cur_node);
+        sents.append(sent);
+
+      elif cur_rel in STOP_TYPES: #out_degreee==0?
+        left_sent.append(cur_node);
+      else:
+        out_edges = G.out_edges(cur_node, data=True);
+        left_edges = list();
+        right_edges = list();
+        compound_edges = list();
+        left_non_terminal_edges = list();
+        cc = None;
+        conj_edge = None;
+        found_det = False;
+        for out_edge in out_edges:
+          next_node = out_edge[1];
+          next_node_type = out_edge[2]['rel'];
+          if next_node_type in STOP_TYPES:
+            # limit to one determiner
+            if not found_det or not next_node_type == 'det':
+              if next_node_type == 'det':
+                found_det = True;
+              left_edges.append((next_node, next_node_type));
+          elif cur_rel in LEFT_NON_TERMINAL:
+            left_non_terminal_edges.append((next_node, next_node_type));
+          elif next_node_type == 'cc':
+            cc = next_node;
+          elif next_node_type == 'conj':
+            conj_edge = (next_node, next_node_type);
+          elif next_node_type == 'compound':
+            compound_edges.append((next_node, next_node_type));
+          else:
+            right_edges.append((next_node, next_node_type));
+        #left non terminal edges
+        for (next_node, next_node_type) in left_non_terminal_edges:
+          sents = self.__find_sentences(G, nsubj_roots, visited_nodes, left_sent, next_node, next_node_type, sents);
+        #left edges
+        for (next_node, next_node_type) in left_edges:
+          sents = self.__find_sentences(G, nsubj_roots, visited_nodes, left_sent, next_node, next_node_type, sents);
+        #compounds
+        for (next_node, next_node_type) in compound_edges:
+          sents = self.__find_sentences(G, nsubj_roots, visited_nodes, left_sent, next_node, next_node_type, sents);
+        #current node
+        left_sent.append(cur_node);
+        #right edges
+        for (next_node, next_node_type) in right_edges:
+          #branching?
+          sents = self.__find_sentences(G, nsubj_roots, visited_nodes, left_sent, next_node, next_node_type, sents);
+        #conjunctions
+        if cc and conj_edge:
+          left_sent.append(cc);
+          sents = self.__find_sentences(G, nsubj_roots, visited_nodes, left_sent, conj_edge[0], conj_edge[1], sents);
+
+    return sents;
+
+
   def analyze(self):
+    # begin test 1
     g = nx.DiGraph()
     added = set();
     score_tol = 0.0025;
@@ -167,8 +283,8 @@ class multi_document_dependency_ranker(object):
         b = wn.morphy(triple[2][0]) or triple[2][0];
         relationship = triple[1];
         g.add_edge(a, b, dep=relationship, weight=score);
-    nx.draw(g, with_labels = True);
-    plt.show();
+    #nx.draw(g, with_labels = True);
+    #plt.show();
 
     for e in g.edges(data=True):
       dep = e[2]['dep']
@@ -224,12 +340,19 @@ class multi_document_dependency_ranker(object):
           for n in G.nodes(data=True):
             if n[0] == base:
               n[1]['word'].append((word, pos));
+      if not G.has_edge(base_words[0], base_words[1]):
         G.add_edge(base_words[0], base_words[1], rel=rel);
+        
     return G;
 
   def __parse_documents(self, documents):
     for document in documents:
+      avg_sent = 0;
       sents = nltk.sent_tokenize(document);
+      for sent in sents:
+        avg_sent += len(sent);
+      
+      self.avg_sent_length = floor(avg_sent / float(len(sents)));
       if not os.path.isfile('parsed.pickle') or not os.path.isfile('graph.pickle'):
         print('Parsing...');
         a = datetime.now();
@@ -255,7 +378,7 @@ class multi_document_dependency_ranker(object):
     
 
 #test data
-alien_document = open('corpus.txt').read().replace('\r\n', ' ').lower();
+alien_document = open('corpus.txt').read().replace('\r\n', ' ').replace(',', '').lower();
 documents = [alien_document];
 
 #convert all to lower case
@@ -270,7 +393,8 @@ if not os.path.isfile('resume.pickle'):
 else:
   print('Loading pickle...');
   ranker = pickle.load(open('resume.pickle', 'rb'));
-  ranker.analyze();
+  #ranker.analyze();
+  ranker.analyze2();
   print('Loaded.');
 
 # markovify test
