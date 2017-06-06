@@ -41,10 +41,10 @@ from operator import itemgetter
 import preprocessor as pre
 
 # Environmental Variables
-os.environ['STANFORD_PARSER'] = './stanford-parser-full/'
-os.environ['STANFORD_MODELS'] = './stanford-parser-full/'
+os.environ['STANFORD_PARSER'] = '../stanford-parser-full/'
+os.environ['STANFORD_MODELS'] = '../stanford-parser-full/'
 
-MODEL_PATH = "./stanford-parser-full/englishPCFG.ser.gz"
+MODEL_PATH = "../stanford-parser-full/englishPCFG.ser.gz"
 
 STOP_TYPES = ['det', 'aux', 'cop', 'neg', 'case', 'mark', 'nsubj', 'amod', 'nmod:poss', 'auxpass']
 LEFT_NON_TERMINAL = ['nsubjpass']
@@ -218,8 +218,8 @@ class multi_document_dependency_ranker(object):
       
       score = self.ranked_nodes[n]
       triple = json.loads(n)
-      sdistance = abs(TextBlob(triple[0][0] + ' ' + triple[2][0]).sentiment.polarity - self.overall_sentiment);
-      score = score / sdistance;
+      #sdistance = abs(TextBlob(triple[0][0] + ' ' + triple[2][0]).sentiment.polarity - self.overall_sentiment);
+      score = score #/ sdistance;
       a = wn.morphy(triple[0][0]) or triple[0][0]
       b = wn.morphy(triple[2][0]) or triple[2][0]
       if a not in added:
@@ -463,7 +463,7 @@ class multi_document_dependency_ranker(object):
           c = 1
         visited_nodes[cur_node] = c
         
-      if not left_sent[-1] is float and (cur_rel == 'dobj' or (out_degree == 0 and cur_rel not in STOP_TYPES and cur_rel not in LEFT_NON_TERMINAL)):
+      if not left_sent[-1] is float and (cur_rel == 'dobj' or cur_rel == 'nsubj' or (out_degree == 0 and cur_rel not in STOP_TYPES and cur_rel not in LEFT_NON_TERMINAL)):
         #sent.append(','.join(rel_chain))
         sent = copy.deepcopy(left_sent)
         sent.append(score[0] / ((len(sent)) * self.min_word_score * self.min_score))
@@ -550,7 +550,7 @@ class multi_document_dependency_ranker(object):
     pickles results for future use.
     '''
     all_triples = list()
-    if not os.path.isfile('./state/parsed.pickle') or not os.path.isfile('./state/graph.pickle'):
+    if not os.path.isfile('../state/parsed.pickle') or not os.path.isfile('../state/graph.pickle'):
       sentiment = 0;
       for document in documents:
         sentiment = sentiment + TextBlob(document).sentiment.polarity;
@@ -575,13 +575,13 @@ class multi_document_dependency_ranker(object):
       print('Generating union dependency graph...') 
       self.G = self.__triples2graph(all_triples)
       print('Pickling parse...')
-      pickle.dump(self.G, open('./state/graph.pickle', 'wb'))
-      pickle.dump(self.dependency_tool, open('./state/parsed.pickle', 'wb'))
+      pickle.dump(self.G, open('../state/graph.pickle', 'wb'))
+      pickle.dump(self.dependency_tool, open('../state/parsed.pickle', 'wb'))
       print('Parse pickled.')
     else:
       print('Unpickling parsed dependencies...')
-      self.dependency_tool = pickle.load(open('./state/parsed.pickle', 'rb'))
-      self.G = pickle.load(open('./state/graph.pickle', 'rb'))
+      self.dependency_tool = pickle.load(open('../state/parsed.pickle', 'rb'))
+      self.G = pickle.load(open('../state/graph.pickle', 'rb'))
       print('Parse unpickled.')
 
 def main():
@@ -596,14 +596,14 @@ def main():
   for i, document in enumerate(documents):
     documents[i] = document.lower().replace('\r\n', ' ').replace(',', '')
 
-  if not os.path.isfile('./state/resume.pickle'):
+  if not os.path.isfile('../state/resume.pickle'):
     ranker = multi_document_dependency_ranker()
     ranker.rank(documents)
     print('Dumping pickle...')
-    pickle.dump(ranker, open('./state/resume.pickle', 'wb'))
+    pickle.dump(ranker, open('../state/resume.pickle', 'wb'))
   else:
     print('Loading pickle...')
-    ranker = pickle.load(open('./state/resume.pickle', 'rb'))
+    ranker = pickle.load(open('../state/resume.pickle', 'rb'))
     print('Loaded.')
     ranker.create_scoring()
     ranker.score_words()
