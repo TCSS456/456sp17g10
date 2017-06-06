@@ -1,6 +1,8 @@
 import tweepy
 import json
-import pprint
+from pprint import pprint
+import preprocessor as pre
+from bs4 import BeautifulSoup
 
 with open('creds.json') as data_file:    
     data = json.load(data_file)
@@ -18,20 +20,16 @@ api = tweepy.API(auth)
 search_text = raw_input("Enter a hashtag #")
 tag_freq_table = {};
 
+f = open('tweets.csv', 'w');
+
 for tweet in tweepy.Cursor(api.search,
                            q=search_text,
-                           count=2,
+                           count=1,
                            result_type="recent",
-                           include_entities=True,
                            lang="en").items():
-  tags = tweet.entities['hashtags'];
-  for tag_obj in tags:
-    tag = tag_obj['text'].lower();
-    if tag in tag_freq_table:
-      tag_freq_table[tag] += 1;
-    else:
-      tag_freq_table[tag] = 1;
-
-for tag in tag_freq_table:
-  freq = tag_freq_table[tag];
-  print(tag + " : " + str(freq));
+  text = tweet.text;
+  text = BeautifulSoup(text.lower(), 'lxml').get_text()
+  text = ''.join((c for c in text if ord(c) < 128))
+  text = pre.clean(text);
+  text = text + '\n';
+  f.write(text);
